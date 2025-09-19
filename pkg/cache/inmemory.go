@@ -1,6 +1,7 @@
 package cache
 
 import (
+	"container/heap"
 	"sync"
 	"time"
 )
@@ -8,92 +9,160 @@ import (
 type InMemoryCache struct {
 	mu       sync.RWMutex
 	items    map[string]*cacheItem
+	expQueue expirationQueue
 	stop     chan struct{}
 	interval time.Duration
 	maxSize  int
 }
 
 type cacheItem struct {
-	Value      any   `json:"value"`
-	Expiration int64 `json:"expiration"`
+	key        string
+	value      interface{}
+	expiration int64 
+	index      int  
 }
 
+type expirationQueue []*cacheItem
+
+func (eq expirationQueue) Len() int { return len(eq) }
+
+func (eq expirationQueue) Less(i, j int) bool {
+	return eq[i].expiration < eq[j].expiration
+}
+
+func (eq expirationQueue) Swap(i, j int) {
+	eq[i], eq[j] = eq[j], eq[i]
+	eq[i].index = i
+	eq[j].index = j
+}
+
+func (eq *expirationQueue) Push(x interface{}) {
+	n := len(*eq)
+	item := x.(*cacheItem)
+	item.index = n
+	*eq = append(*eq, item)
+}
+
+func (eq *expirationQueue) Pop() interface{} {
+	old := *eq
+	n := len(old)
+	item := old[n-1]
+	old[n-1] = nil
+	item.index = -1
+	*eq = old[0 : n-1]
+	return item
+}
+
+// New создает новый экземпляр кэша
 func New(cleanupInterval time.Duration, maxSize int) *InMemoryCache {
 	c := &InMemoryCache{
 		items:    make(map[string]*cacheItem),
+		expQueue: make(expirationQueue, 0),
 		stop:     make(chan struct{}),
 		interval: cleanupInterval,
 		maxSize:  maxSize,
 	}
+	heap.Init(&c.expQueue)
 	go c.cleanup()
 	return c
 }
 
+// Set добавляет или обновляет значение в кэше
 func (c *InMemoryCache) Set(key string, value interface{}, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.maxSize > 0 && len(c.items) >= c.maxSize {
-		c.evictOne()
+	expiration := time.Now().Add(ttl).UnixNano()
+	
+	if item, exists := c.items[key]; exists {
+		item.value = value
+		item.expiration = expiration
+		heap.Fix(&c.expQueue, item.index)
+		return
 	}
 
-	expiration := time.Now().Add(ttl).UnixNano()
-	c.items[key] = &cacheItem{
-		Value:      value,
-		Expiration: expiration,
+	if c.maxSize > 0 && len(c.items) >= c.maxSize {
+		c.deleteExpired()
 	}
+
+	item := &cacheItem{
+		key:        key,
+		value:      value,
+		expiration: expiration,
+	}
+	heap.Push(&c.expQueue, item)
+	c.items[key] = item
 }
 
+// Get возвращает значение по ключу
 func (c *InMemoryCache) Get(key string) (interface{}, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
 	item, exists := c.items[key]
-	if !exists || time.Now().UnixNano() > item.Expiration {
+	if !exists || time.Now().UnixNano() > item.expiration {
 		return nil, false
 	}
-	return item.Value, true
+	return item.value, true
 }
 
+// Delete удаляет значение по ключу
 func (c *InMemoryCache) Delete(key string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	delete(c.items, key)
+
+	if item, exists := c.items[key]; exists {
+		heap.Remove(&c.expQueue, item.index)
+		delete(c.items, key)
+	}
 }
 
+// Exists проверяет существование ключа
 func (c *InMemoryCache) Exists(key string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+
 	item, exists := c.items[key]
-	return exists && time.Now().UnixNano() <= item.Expiration
+	return exists && time.Now().UnixNano() <= item.expiration
 }
 
+// Keys возвращает все действительные ключи
 func (c *InMemoryCache) Keys() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	keys := make([]string, 0, len(c.items))
+
 	now := time.Now().UnixNano()
+	keys := make([]string, 0, len(c.items))
 	for k, item := range c.items {
-		if now <= item.Expiration {
+		if now <= item.expiration {
 			keys = append(keys, k)
 		}
 	}
 	return keys
 }
 
-func (c *InMemoryCache) evictOne() {
-	var oldestKey string
-	var oldestExpiration int64 = 1<<63 - 1 // Max int64
-
-	for k, item := range c.items {
-		if item.Expiration < oldestExpiration {
-			oldestKey = k
-			oldestExpiration = item.Expiration
-		}
-	}
-	delete(c.items, oldestKey)
+// Cleanup удаляет все просроченные записи
+func (c *InMemoryCache) Cleanup() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.deleteExpired()
 }
 
+// очистка просроченных элементов
+func (c *InMemoryCache) deleteExpired() {
+	now := time.Now().UnixNano()
+	for c.expQueue.Len() > 0 {
+		oldest := c.expQueue[0]
+		if oldest.expiration > now {
+			break
+		}
+		
+		item := heap.Pop(&c.expQueue).(*cacheItem)
+		delete(c.items, item.key)
+	}
+}
+
+// cleanup запускает фоновую очистку
 func (c *InMemoryCache) cleanup() {
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
@@ -101,20 +170,14 @@ func (c *InMemoryCache) cleanup() {
 	for {
 		select {
 		case <-ticker.C:
-			c.mu.Lock()
-			now := time.Now().UnixNano()
-			for key, item := range c.items {
-				if now > item.Expiration {
-					delete(c.items, key)
-				}
-			}
-			c.mu.Unlock()
+			c.Cleanup()
 		case <-c.stop:
 			return
 		}
 	}
 }
 
+// Stop останавливает фоновую очистку
 func (c *InMemoryCache) Stop() {
 	close(c.stop)
 }
