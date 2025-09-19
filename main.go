@@ -172,7 +172,7 @@ func handleExists(cache *cache.InMemoryCache, key string) {
 
 func handleHelp() {
 	fmt.Println("Доступные команды:")
-	fmt.Println("  set <key> <value> <ttl>    - установить значение")
+	fmt.Println("  set <key> <value> <ttl>     - установить значение")
 	fmt.Println("  get <key>                   - получить значение")
 	fmt.Println("  delete <key>                - удалить значение")
 	fmt.Println("  keys                        - показать все ключи")
@@ -181,7 +181,7 @@ func handleHelp() {
 	fmt.Println("  exit, quit                  - выйти из приложения")
 	fmt.Println()
 	fmt.Println("Примеры:")
-	fmt.Println("  set vladivostok 2000 5m          - установить int значение на 5 минут")
+	fmt.Println("  set vladivostok 2000 5m    - установить int значение на 5 минут")
 	fmt.Println("  set chita city 1h          - установить string значение на 1 час")
 	fmt.Println("  set samara true 30m        - установить bool значение на 30 минут")
 }

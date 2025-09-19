@@ -1,11 +1,6 @@
-# In-Memory Cache with REST API
+# In-Memory Cache
 
 ## Основные фичи
-
-REST API
-```text
-Используется как интерфейс для удобной, структурированной работы с кэшем
- ```
 
 Синхронизация
 ```text
@@ -57,72 +52,26 @@ cd in-memory-cache
 go get
  ```
 
-Запуск сервера:
+Запуск:
 ```console 
 go run main.go
  ```
-Сервер запустится на порту 8080.
-
-## Использование API
-
-1. Добавление элемента в кэш
-Запрос:
+Использование:
 ```text
-PUT /cache/{key}
- ```
-Тело запроса:
-```json
-{
-  "value": "любое значение", //помимо string, в том числе типа int, float и иные
-  "ttl": "10s" // в формате "300ms", "2s", "5m"
-}
+set <key> <value> <ttl>    - установить значение
+get <key>                  - получить значение
+delete <key>               - удалить значение
+keys                       - показать все ключи
+exists <key>               - проверить существование ключа
+help                       - показать справку
+exit, quit                 - выйти из приложения
 ```
-Пример:
-```console 
-curl -X PUT -H "Content-Type: application/json" 
-\ -d '{"value": "my_value", "ttl": "1m"}' 
-\ http://localhost:8080/cache/mykey
- ```
 
-2. Получение значения из кэша по ключу
-Запрос:
+Примеры:
 ```text
-GET /cache/{key}
- ```
-Пример:
-```console 
-curl http://localhost:8080/cache/mykey
- ```
-Ответ:
-```json
-{
-  "value": "my_value",
-  "exists": true
-}
- ```
-
-3. Удаление значения
-Запрос:
-```text
-DELETE /cache/{key}
- ```
-Пример:
-```console 
-curl -X DELETE http://localhost:8080/cache/mykey
- ```
-
-4. Получение всех ключей
-Запрос:
-```text
-GET /cache
- ```
-Пример:
-```console 
-curl http://localhost:8080/cache
- ```
-Ответ:
-```json
-{
-  "keys": ["key1", "key2", "key3"]
-}
- ```
+set vladivostok 2000 5m    - установить int значение на 5 минут
+set chita city 1h          - установить string значение на 1 час
+set samara true 30m        - установить bool значение на 30 минут
+get samara                 - вернуть значение по ключу samara
+delete vladivostok         - удалить значение по ключу vladivostok
+```
