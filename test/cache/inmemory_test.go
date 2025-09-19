@@ -1,10 +1,10 @@
 package cache_test
 
 import (
+	"github.com/medvedev-v/in-memory-cache/pkg/cache"
 	"sync"
 	"testing"
 	"time"
-	"github.com/medvedev-v/in-memory-cache/pkg/cache"
 )
 
 func TestNew(t *testing.T) {
