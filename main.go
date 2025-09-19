@@ -3,26 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/medvedev-v/in-memory-cache/pkg/cache"
+	"gopkg.in/yaml.v3"
 	"log"
 	"net/http"
-	"sync"
-	"time"
 	"os"
-	"gopkg.in/yaml.v3"
+	"time"
 )
-
-type Cache struct {
-	mu       sync.RWMutex
-	items    map[string]*cacheItem
-	stop     chan struct{}
-	interval time.Duration
-	maxSize  int
-}
-
-type cacheItem struct {
-	Value      any   `json:"value"`
-	Expiration int64 `json:"expiration"`
-}
 
 // Запрос для установки значения
 type SetRequest struct {
@@ -43,7 +30,7 @@ type KeysResponse struct {
 
 type Config struct {
 	CacheRefreshRate int `yaml:"cacherefreshrate"`
-	CacheMaxSize int `yaml:"cachemaxsize"`
+	CacheMaxSize     int `yaml:"cachemaxsize"`
 }
 
 func (config *Config) init() *Config {
@@ -59,112 +46,11 @@ func (config *Config) init() *Config {
 	return config
 }
 
-func NewCache(cleanupInterval time.Duration, maxSize int) *Cache {
-	c := &Cache{
-		items:    make(map[string]*cacheItem),
-		stop:     make(chan struct{}),
-		interval: cleanupInterval,
-		maxSize:  maxSize,
-	}
-	go c.cleanup()
-	return c
-}
-
-func (c *Cache) Set(key string, value interface{}, ttl time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if c.maxSize > 0 && len(c.items) >= c.maxSize {
-		c.evictOne()
-	}
-
-	expiration := time.Now().Add(ttl).UnixNano()
-	c.items[key] = &cacheItem{
-		Value:      value,
-		Expiration: expiration,
-	}
-}
-
-func (c *Cache) Get(key string) (interface{}, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	item, exists := c.items[key]
-	if !exists || time.Now().UnixNano() > item.Expiration {
-		return nil, false
-	}
-	return item.Value, true
-}
-
-func (c *Cache) Delete(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.items, key)
-}
-
-func (c *Cache) Exists(key string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	item, exists := c.items[key]
-	return exists && time.Now().UnixNano() <= item.Expiration
-}
-
-func (c *Cache) Keys() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	keys := make([]string, 0, len(c.items))
-	now := time.Now().UnixNano()
-	for k, item := range c.items {
-		if now <= item.Expiration {
-			keys = append(keys, k)
-		}
-	}
-	return keys
-}
-
-func (c *Cache) evictOne() {
-	var oldestKey string
-	var oldestExpiration int64 = 1<<63 - 1 // Max int64
-
-	for k, item := range c.items {
-		if item.Expiration < oldestExpiration {
-			oldestKey = k
-			oldestExpiration = item.Expiration
-		}
-	}
-	delete(c.items, oldestKey)
-}
-
-func (c *Cache) cleanup() {
-	ticker := time.NewTicker(c.interval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			c.mu.Lock()
-			now := time.Now().UnixNano()
-			for key, item := range c.items {
-				if now > item.Expiration {
-					delete(c.items, key)
-				}
-			}
-			c.mu.Unlock()
-		case <-c.stop:
-			return
-		}
-	}
-}
-
-func (c *Cache) Stop() {
-	close(c.stop)
-}
-
 func main() {
 	// Инициализация конфига из файла config.yaml
 	var config Config
 	config.init()
-	cache := NewCache(time.Duration(config.CacheRefreshRate) * time.Second, config.CacheMaxSize)
+	cache := cache.New(time.Duration(config.CacheRefreshRate)*time.Second, config.CacheMaxSize)
 	defer cache.Stop()
 
 	// Регистрируем HTTP обработчики
@@ -196,7 +82,7 @@ func main() {
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
-func handleGet(cache *Cache, key string, w http.ResponseWriter) {
+func handleGet(cache *cache.InMemoryCache, key string, w http.ResponseWriter) {
 	if key == "" {
 		http.Error(w, "Key is required", http.StatusBadRequest)
 		return
@@ -214,7 +100,7 @@ func handleGet(cache *Cache, key string, w http.ResponseWriter) {
 	}
 }
 
-func handleSet(cache *Cache, key string, w http.ResponseWriter, r *http.Request) {
+func handleSet(cache *cache.InMemoryCache, key string, w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		http.Error(w, "Key is required", http.StatusBadRequest)
 		return
@@ -236,7 +122,7 @@ func handleSet(cache *Cache, key string, w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusCreated)
 }
 
-func handleDelete(cache *Cache, key string, w http.ResponseWriter) {
+func handleDelete(cache *cache.InMemoryCache, key string, w http.ResponseWriter) {
 	if key == "" {
 		http.Error(w, "Key is required", http.StatusBadRequest)
 		return
@@ -246,7 +132,7 @@ func handleDelete(cache *Cache, key string, w http.ResponseWriter) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func handleKeys(cache *Cache, w http.ResponseWriter) {
+func handleKeys(cache *cache.InMemoryCache, w http.ResponseWriter) {
 	keys := cache.Keys()
 	response := KeysResponse{Keys: keys}
 
