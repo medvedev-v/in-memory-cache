@@ -50,10 +50,11 @@ Go 1.16 или выше
 
 ## Установка и запуск
 
-Клонируйте репозиторий:
+Клонируйте репозиторий и подтяните зависимости:
 ```console 
-git clone <your-repo-url>
+git clone https://github.com/medvedev-v/in-memory-cache
 cd in-memory-cache
+go get
  ```
 
 Запуск сервера:

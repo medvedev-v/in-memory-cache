@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"sync"
 	"time"
+	"os"
+	"gopkg.in/yaml.v3"
 )
 
 type Cache struct {
@@ -37,6 +39,24 @@ type GetResponse struct {
 // Ответ для получения всех ключей
 type KeysResponse struct {
 	Keys []string `json:"keys"`
+}
+
+type Config struct {
+	CacheRefreshRate int `yaml:"cacherefreshrate"`
+	CacheMaxSize int `yaml:"cachemaxsize"`
+}
+
+func (config *Config) init() *Config {
+	yamlFile, error := os.ReadFile("config.yaml")
+	if error != nil {
+		panic(error)
+	}
+	error = yaml.Unmarshal(yamlFile, config)
+	if error != nil {
+		panic(error)
+	}
+
+	return config
 }
 
 func NewCache(cleanupInterval time.Duration, maxSize int) *Cache {
@@ -141,8 +161,10 @@ func (c *Cache) Stop() {
 }
 
 func main() {
-	// Создаем кэш с очисткой каждые 10 секунд и максимальным размером 100 элементов
-	cache := NewCache(10*time.Second, 100)
+	// Инициализация конфига из файла config.yaml
+	var config Config
+	config.init()
+	cache := NewCache(time.Duration(config.CacheRefreshRate) * time.Second, config.CacheMaxSize)
 	defer cache.Stop()
 
 	// Регистрируем HTTP обработчики
