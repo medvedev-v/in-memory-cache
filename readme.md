@@ -40,6 +40,11 @@ go get
 go run main.go
  ```
 
+### Тесты:
+```console 
+go test ./test/cache/ -v
+ ```
+
 ### Использование:
 ```text
 set <key> <value> <ttl>    - установить значение
