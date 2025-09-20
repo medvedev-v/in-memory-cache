@@ -17,11 +17,12 @@ type InMemoryCache struct {
 
 type cacheItem struct {
 	key        string
-	value      interface{}
-	expiration int64 
-	index      int  
+	value      any
+	expiration int64
+	index      int
 }
 
+// реализация container.heap
 type expirationQueue []*cacheItem
 
 func (eq expirationQueue) Len() int { return len(eq) }
@@ -36,14 +37,14 @@ func (eq expirationQueue) Swap(i, j int) {
 	eq[j].index = j
 }
 
-func (eq *expirationQueue) Push(x interface{}) {
+func (eq *expirationQueue) Push(x any) {
 	n := len(*eq)
 	item := x.(*cacheItem)
 	item.index = n
 	*eq = append(*eq, item)
 }
 
-func (eq *expirationQueue) Pop() interface{} {
+func (eq *expirationQueue) Pop() any {
 	old := *eq
 	n := len(old)
 	item := old[n-1]
@@ -68,12 +69,12 @@ func New(cleanupInterval time.Duration, maxSize int) *InMemoryCache {
 }
 
 // Set добавляет или обновляет значение в кэше
-func (c *InMemoryCache) Set(key string, value interface{}, ttl time.Duration) {
+func (c *InMemoryCache) Set(key string, value any, ttl time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	expiration := time.Now().Add(ttl).UnixNano()
-	
+
 	if item, exists := c.items[key]; exists {
 		item.value = value
 		item.expiration = expiration
@@ -81,8 +82,18 @@ func (c *InMemoryCache) Set(key string, value interface{}, ttl time.Duration) {
 		return
 	}
 
+	// Если достигнут максимальный размер, сначала удаляем просроченные
 	if c.maxSize > 0 && len(c.items) >= c.maxSize {
 		c.deleteExpired()
+		
+		// Если после очистки просроченных все еще достигнут максимальный размер,
+		// удаляем самый старый элемент
+		if len(c.items) >= c.maxSize {
+			if c.expQueue.Len() > 0 {
+				oldest := heap.Pop(&c.expQueue).(*cacheItem)
+				delete(c.items, oldest.key)
+			}
+		}
 	}
 
 	item := &cacheItem{
@@ -95,7 +106,7 @@ func (c *InMemoryCache) Set(key string, value interface{}, ttl time.Duration) {
 }
 
 // Get возвращает значение по ключу
-func (c *InMemoryCache) Get(key string) (interface{}, bool) {
+func (c *InMemoryCache) Get(key string) (any, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -141,6 +152,13 @@ func (c *InMemoryCache) Keys() []string {
 	return keys
 }
 
+// Size возвращает текущее количество элементов (включая просроченные)
+func (c *InMemoryCache) Size() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.items)
+}
+
 // Cleanup удаляет все просроченные записи
 func (c *InMemoryCache) Cleanup() {
 	c.mu.Lock()
@@ -151,14 +169,17 @@ func (c *InMemoryCache) Cleanup() {
 // очистка просроченных элементов
 func (c *InMemoryCache) deleteExpired() {
 	now := time.Now().UnixNano()
-	for c.expQueue.Len() > 0 {
+	maxCleanup := 100 // Ограничение на количество удаляемых элементов за раз
+	
+	for c.expQueue.Len() > 0 && maxCleanup > 0 {
 		oldest := c.expQueue[0]
 		if oldest.expiration > now {
 			break
 		}
-		
+
 		item := heap.Pop(&c.expQueue).(*cacheItem)
 		delete(c.items, item.key)
+		maxCleanup--
 	}
 }
 

@@ -67,26 +67,19 @@ func main() {
 		switch command {
 		case "set":
 			handleSet(cache, parts[1], parts[2], parts[3])
-
 		case "get":
 			handleGet(cache, parts[1])
-
 		case "delete":
 			handleDelete(cache, parts[1])
-
 		case "keys":
 			handleKeys(cache)
-
 		case "exists":
 			handleExists(cache, parts[1])
-
 		case "exit", "quit":
 			fmt.Println("Завершение работы...")
 			return
-
 		case "help":
 			handleHelp()
-
 		default:
 			fmt.Printf("Неизвестная команда: %s. Введите 'help' для справки.\n", command)
 		}

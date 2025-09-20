@@ -258,7 +258,7 @@ func TestDifferentValueTypes(t *testing.T) {
 
 	testCases := []struct {
 		key   string
-		value interface{}
+		value any
 	}{
 		{"string", "hello"},
 		{"int", 42},
@@ -291,5 +291,62 @@ func TestDifferentValueTypes(t *testing.T) {
 				t.Errorf("Value mismatch for key %s", tc.key)
 			}
 		}
+	}
+}
+
+func TestMaxSizeWithExpiration(t *testing.T) {
+	c := cache.New(time.Minute, 2)
+	defer c.Stop()
+
+	c.Set("key1", "value1", 10*time.Millisecond)
+	c.Set("key2", "value2", 10*time.Millisecond)
+
+	time.Sleep(20 * time.Millisecond)
+
+	c.Set("key3", "value3", time.Minute)
+
+	_, exists := c.Get("key1")
+	if exists {
+		t.Error("Expired key1 should have been evicted")
+	}
+
+	_, exists = c.Get("key2")
+	if exists {
+		t.Error("Expired key2 should have been evicted")
+	}
+
+	_, exists = c.Get("key3")
+	if !exists {
+		t.Error("New key3 should be present")
+	}
+
+	if len(c.Keys()) != 1 {
+		t.Errorf("Expected 1 key, got %d", len(c.Keys()))
+	}
+}
+
+func TestSize(t *testing.T) {
+	c := cache.New(time.Minute, 10)
+	defer c.Stop()
+
+	if c.Size() != 0 {
+		t.Errorf("Expected size 0, got %d", c.Size())
+	}
+
+	c.Set("key1", "value1", time.Minute)
+	if c.Size() != 1 {
+		t.Errorf("Expected size 1, got %d", c.Size())
+	}
+
+	c.Set("key2", "value2", 10*time.Millisecond)
+	if c.Size() != 2 {
+		t.Errorf("Expected size 2, got %d", c.Size())
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	c.Cleanup()
+	if c.Size() != 1 {
+		t.Errorf("Expected size 1 after cleanup, got %d", c.Size())
 	}
 }
