@@ -85,7 +85,7 @@ func (c *InMemoryCache) Set(key string, value any, ttl time.Duration) {
 	// Если достигнут максимальный размер, сначала удаляем просроченные
 	if c.maxSize > 0 && len(c.items) >= c.maxSize {
 		c.deleteExpired()
-		
+
 		// Если после очистки просроченных все еще достигнут максимальный размер,
 		// удаляем самый старый элемент
 		if len(c.items) >= c.maxSize {
@@ -170,7 +170,7 @@ func (c *InMemoryCache) Cleanup() {
 func (c *InMemoryCache) deleteExpired() {
 	now := time.Now().UnixNano()
 	maxCleanup := 100 // Ограничение на количество удаляемых элементов за раз
-	
+
 	for c.expQueue.Len() > 0 && maxCleanup > 0 {
 		oldest := c.expQueue[0]
 		if oldest.expiration > now {

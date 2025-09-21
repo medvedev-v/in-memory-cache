@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// Тест создания нового экземпляра кэша
 func TestNew(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	if c == nil {
@@ -15,6 +16,7 @@ func TestNew(t *testing.T) {
 	c.Stop()
 }
 
+// Тест базовых операций добавления и получения значений
 func TestSetAndGet(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
@@ -36,25 +38,7 @@ func TestSetAndGet(t *testing.T) {
 	}
 }
 
-func TestExpiration(t *testing.T) {
-	c := cache.New(10*time.Millisecond, 10)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-
-	_, exists := c.Get("key1")
-	if !exists {
-		t.Error("Key should exist before expiration")
-	}
-
-	time.Sleep(20 * time.Millisecond)
-
-	_, exists = c.Get("key1")
-	if exists {
-		t.Error("Key should not exist after expiration")
-	}
-}
-
+// Тест удаления значений
 func TestDelete(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
@@ -70,6 +54,7 @@ func TestDelete(t *testing.T) {
 	c.Delete("nonexistent")
 }
 
+// Тест проверки существования ключей
 func TestExists(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
@@ -91,6 +76,7 @@ func TestExists(t *testing.T) {
 	}
 }
 
+// Тест получения списка всех ключей
 func TestKeys(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
@@ -120,7 +106,97 @@ func TestKeys(t *testing.T) {
 	}
 }
 
+// Тест получения размера кэша
+func TestSize(t *testing.T) {
+
+	c := cache.New(time.Minute, 10)
+	defer c.Stop()
+
+	if c.Size() != 0 {
+		t.Errorf("Expected size 0, got %d", c.Size())
+	}
+
+	c.Set("key1", "value1", time.Minute)
+	if c.Size() != 1 {
+		t.Errorf("Expected size 1, got %d", c.Size())
+	}
+
+	c.Set("key2", "value2", 10*time.Millisecond)
+	if c.Size() != 2 {
+		t.Errorf("Expected size 2, got %d", c.Size())
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	c.Cleanup()
+	if c.Size() != 1 {
+		t.Errorf("Expected size 1 after cleanup, got %d", c.Size())
+	}
+}
+
+// Тест корректной остановки кэша
+func TestStop(t *testing.T) {
+	c := cache.New(time.Minute, 10)
+
+	c.Set("key1", "value1", time.Minute)
+	c.Set("key2", "value2", time.Minute)
+
+	c.Stop()
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Error("Using stopped cache caused panic")
+		}
+	}()
+
+	c.Set("key3", "value3", time.Minute)
+	_, _ = c.Get("key1")
+}
+
+// Тест автоматического истечения времени жизни записей
+func TestExpiration(t *testing.T) {
+	c := cache.New(10*time.Millisecond, 10)
+	defer c.Stop()
+
+	c.Set("key1", "value1", 10*time.Millisecond)
+
+	_, exists := c.Get("key1")
+	if !exists {
+		t.Error("Key should exist before expiration")
+	}
+
+	time.Sleep(20 * time.Millisecond)
+
+	_, exists = c.Get("key1")
+	if exists {
+		t.Error("Key should not exist after expiration")
+	}
+}
+
+// Тест фоновой очистки просроченных записей
+func TestCleanup(t *testing.T) {
+	c := cache.New(5*time.Millisecond, 10)
+	defer c.Stop()
+
+	c.Set("key1", "value1", 10*time.Millisecond)
+	c.Set("key2", "value2", time.Minute)
+
+	time.Sleep(20 * time.Millisecond)
+
+	_, exists := c.Get("key1")
+	if exists {
+		t.Error("Expired key should have been cleaned up")
+	}
+
+	_, exists = c.Get("key2")
+	if !exists {
+		t.Error("Non-expired key should still exist")
+	}
+}
+
+// Тест ограничения максимального размера кэша
 func TestMaxSize(t *testing.T) {
+
 	c := cache.New(time.Minute, 2)
 	defer c.Stop()
 
@@ -154,6 +230,67 @@ func TestMaxSize(t *testing.T) {
 	}
 }
 
+// Тест взаимодействия максимального размера и TTL
+func TestMaxSizeWithExpiration(t *testing.T) {
+	c := cache.New(time.Minute, 2)
+	defer c.Stop()
+
+	c.Set("key1", "value1", 10*time.Millisecond)
+	c.Set("key2", "value2", 10*time.Millisecond)
+
+	time.Sleep(20 * time.Millisecond)
+
+	c.Set("key3", "value3", time.Minute)
+
+	_, exists := c.Get("key1")
+	if exists {
+		t.Error("Expired key1 should have been evicted")
+	}
+
+	_, exists = c.Get("key2")
+	if exists {
+		t.Error("Expired key2 should have been evicted")
+	}
+
+	_, exists = c.Get("key3")
+	if !exists {
+		t.Error("New key3 should be present")
+	}
+
+	if len(c.Keys()) != 1 {
+		t.Errorf("Expected 1 key, got %d", len(c.Keys()))
+	}
+}
+
+// Тест политики вытеснения при достижении лимита
+func TestEvictionPolicy(t *testing.T) {
+	c := cache.New(time.Minute, 2)
+	defer c.Stop()
+
+	c.Set("key1", "value1", 10*time.Millisecond)
+	c.Set("key2", "value2", time.Minute)
+
+	time.Sleep(20 * time.Millisecond)
+
+	c.Set("key3", "value3", time.Minute)
+
+	_, exists := c.Get("key1")
+	if exists {
+		t.Error("Expired key should have been evicted")
+	}
+
+	_, exists = c.Get("key2")
+	if !exists {
+		t.Error("Non-expired key should still be present")
+	}
+
+	_, exists = c.Get("key3")
+	if !exists {
+		t.Error("New key should be present")
+	}
+}
+
+// Тест потокобезопасности кэша при одновременном доступе
 func TestConcurrentAccess(t *testing.T) {
 	c := cache.New(time.Minute, 100)
 	defer c.Stop()
@@ -187,71 +324,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestCleanup(t *testing.T) {
-	c := cache.New(5*time.Millisecond, 10)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-	c.Set("key2", "value2", time.Minute)
-
-	time.Sleep(20 * time.Millisecond)
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Expired key should have been cleaned up")
-	}
-
-	_, exists = c.Get("key2")
-	if !exists {
-		t.Error("Non-expired key should still exist")
-	}
-}
-
-func TestStop(t *testing.T) {
-	c := cache.New(time.Minute, 10)
-
-	c.Set("key1", "value1", time.Minute)
-	c.Set("key2", "value2", time.Minute)
-
-	c.Stop()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Error("Using stopped cache caused panic")
-		}
-	}()
-
-	c.Set("key3", "value3", time.Minute)
-	_, _ = c.Get("key1")
-}
-
-func TestEvictionPolicy(t *testing.T) {
-	c := cache.New(time.Minute, 2)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-	c.Set("key2", "value2", time.Minute)
-
-	time.Sleep(20 * time.Millisecond)
-
-	c.Set("key3", "value3", time.Minute)
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Expired key should have been evicted")
-	}
-
-	_, exists = c.Get("key2")
-	if !exists {
-		t.Error("Non-expired key should still be present")
-	}
-
-	_, exists = c.Get("key3")
-	if !exists {
-		t.Error("New key should be present")
-	}
-}
-
+// Тест поддержки различных типов данных в качестве значений
 func TestDifferentValueTypes(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
@@ -291,62 +364,5 @@ func TestDifferentValueTypes(t *testing.T) {
 				t.Errorf("Value mismatch for key %s", tc.key)
 			}
 		}
-	}
-}
-
-func TestMaxSizeWithExpiration(t *testing.T) {
-	c := cache.New(time.Minute, 2)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-	c.Set("key2", "value2", 10*time.Millisecond)
-
-	time.Sleep(20 * time.Millisecond)
-
-	c.Set("key3", "value3", time.Minute)
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Expired key1 should have been evicted")
-	}
-
-	_, exists = c.Get("key2")
-	if exists {
-		t.Error("Expired key2 should have been evicted")
-	}
-
-	_, exists = c.Get("key3")
-	if !exists {
-		t.Error("New key3 should be present")
-	}
-
-	if len(c.Keys()) != 1 {
-		t.Errorf("Expected 1 key, got %d", len(c.Keys()))
-	}
-}
-
-func TestSize(t *testing.T) {
-	c := cache.New(time.Minute, 10)
-	defer c.Stop()
-
-	if c.Size() != 0 {
-		t.Errorf("Expected size 0, got %d", c.Size())
-	}
-
-	c.Set("key1", "value1", time.Minute)
-	if c.Size() != 1 {
-		t.Errorf("Expected size 1, got %d", c.Size())
-	}
-
-	c.Set("key2", "value2", 10*time.Millisecond)
-	if c.Size() != 2 {
-		t.Errorf("Expected size 2, got %d", c.Size())
-	}
-
-	time.Sleep(20 * time.Millisecond)
-
-	c.Cleanup()
-	if c.Size() != 1 {
-		t.Errorf("Expected size 1 after cleanup, got %d", c.Size())
 	}
 }
