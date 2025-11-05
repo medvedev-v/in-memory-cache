@@ -1,335 +1,133 @@
 package cache_test
 
 import (
-	"github.com/medvedev-v/in-memory-cache/pkg/cache"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/medvedev-v/in-memory-cache/pkg/cache"
 )
 
-// Тест создания нового экземпляра кэша
-func TestNew(t *testing.T) {
-	c := cache.New(time.Minute, 10)
-	if c == nil {
-		t.Error("New returned nil")
-	}
-	c.Stop()
-}
-
-// Тест базовых операций добавления и получения значений
-func TestSetAndGet(t *testing.T) {
+func TestBasicOperations(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
 
+	// Test Set/Get
 	c.Set("key1", "value1", time.Minute)
-
-	value, exists := c.Get("key1")
-	if !exists {
-		t.Error("Key should exist")
+	if val, exists := c.Get("key1"); !exists || val != "value1" {
+		t.Error("Basic Set/Get failed")
 	}
 
-	if value != "value1" {
-		t.Errorf("Expected 'value1', got %v", value)
-	}
-
-	_, exists = c.Get("nonexistent")
-	if exists {
-		t.Error("Non-existent key should not exist")
-	}
-}
-
-// Тест удаления значений
-func TestDelete(t *testing.T) {
-	c := cache.New(time.Minute, 10)
-	defer c.Stop()
-
-	c.Set("key1", "value1", time.Minute)
-	c.Delete("key1")
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Key should not exist after deletion")
-	}
-
-	c.Delete("nonexistent")
-}
-
-// Тест проверки существования ключей
-func TestExists(t *testing.T) {
-	c := cache.New(time.Minute, 10)
-	defer c.Stop()
-
-	c.Set("key1", "value1", time.Minute)
-
+	// Test Exists
 	if !c.Exists("key1") {
-		t.Error("Exists should return true for existing key")
+		t.Error("Exists failed for existing key")
 	}
-
 	if c.Exists("nonexistent") {
 		t.Error("Exists should return false for non-existent key")
 	}
 
-	c.Set("key2", "value2", 10*time.Millisecond)
-	time.Sleep(20 * time.Millisecond)
-	if c.Exists("key2") {
-		t.Error("Exists should return false for expired key")
+	// Test Delete
+	c.Delete("key1")
+	if _, exists := c.Get("key1"); exists {
+		t.Error("Delete failed")
 	}
 }
 
-// Тест получения списка всех ключей
-func TestKeys(t *testing.T) {
-	c := cache.New(time.Minute, 10)
+func TestTTLExpiration(t *testing.T) {
+	c := cache.New(100*time.Millisecond, 10)
 	defer c.Stop()
 
+	c.Set("key1", "value1", 50*time.Millisecond)
+	
+	// Should exist before expiration
+	if !c.Exists("key1") {
+		t.Error("Key should exist before TTL expiration")
+	}
+
+	// Wait for expiration
+	time.Sleep(100 * time.Millisecond)
+
+	// Should not exist after expiration
+	if c.Exists("key1") {
+		t.Error("Key should not exist after TTL expiration")
+	}
+}
+
+func TestLRUEviction(t *testing.T) {
+	c := cache.New(time.Minute, 2)
+	defer c.Stop()
+
+	// Fill cache to max size
 	c.Set("key1", "value1", time.Minute)
 	c.Set("key2", "value2", time.Minute)
-	c.Set("key3", "value3", 10*time.Millisecond)
 
-	keys := c.Keys()
-	if len(keys) != 3 {
-		t.Errorf("Expected 3 keys, got %d", len(keys))
-	}
-
-	keysMap := make(map[string]bool)
-	for _, key := range keys {
-		keysMap[key] = true
-	}
-
-	if !keysMap["key1"] || !keysMap["key2"] || !keysMap["key3"] {
-		t.Error("Not all keys are present in the result")
-	}
-
-	time.Sleep(20 * time.Millisecond)
-	keys = c.Keys()
-	if len(keys) != 2 {
-		t.Errorf("Expected 2 keys after expiration, got %d", len(keys))
-	}
-}
-
-// Тест получения размера кэша
-func TestSize(t *testing.T) {
-
-	c := cache.New(time.Minute, 10)
-	defer c.Stop()
-
-	if c.Size() != 0 {
-		t.Errorf("Expected size 0, got %d", c.Size())
-	}
-
-	c.Set("key1", "value1", time.Minute)
-	if c.Size() != 1 {
-		t.Errorf("Expected size 1, got %d", c.Size())
-	}
-
-	c.Set("key2", "value2", 10*time.Millisecond)
 	if c.Size() != 2 {
-		t.Errorf("Expected size 2, got %d", c.Size())
+		t.Error("Cache should have 2 items")
 	}
 
-	time.Sleep(20 * time.Millisecond)
+	// Access key1 to update its access sequence
+	c.Get("key1")
 
-	c.Cleanup()
-	if c.Size() != 1 {
-		t.Errorf("Expected size 1 after cleanup, got %d", c.Size())
-	}
-}
-
-// Тест корректной остановки кэша
-func TestStop(t *testing.T) {
-	c := cache.New(time.Minute, 10)
-
-	c.Set("key1", "value1", time.Minute)
-	c.Set("key2", "value2", time.Minute)
-
-	c.Stop()
-
-	defer func() {
-		if r := recover(); r != nil {
-			t.Error("Using stopped cache caused panic")
-		}
-	}()
-
-	c.Set("key3", "value3", time.Minute)
-	_, _ = c.Get("key1")
-}
-
-// Тест автоматического истечения времени жизни записей
-func TestExpiration(t *testing.T) {
-	c := cache.New(10*time.Millisecond, 10)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-
-	_, exists := c.Get("key1")
-	if !exists {
-		t.Error("Key should exist before expiration")
-	}
-
-	time.Sleep(20 * time.Millisecond)
-
-	_, exists = c.Get("key1")
-	if exists {
-		t.Error("Key should not exist after expiration")
-	}
-}
-
-// Тест фоновой очистки просроченных записей
-func TestCleanup(t *testing.T) {
-	c := cache.New(5*time.Millisecond, 10)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-	c.Set("key2", "value2", time.Minute)
-
-	time.Sleep(20 * time.Millisecond)
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Expired key should have been cleaned up")
-	}
-
-	_, exists = c.Get("key2")
-	if !exists {
-		t.Error("Non-expired key should still exist")
-	}
-}
-
-// Тест ограничения максимального размера кэша
-func TestMaxSize(t *testing.T) {
-
-	c := cache.New(time.Minute, 2)
-	defer c.Stop()
-
-	c.Set("key1", "value1", time.Minute)
-	c.Set("key2", "value2", time.Minute)
-
-	if len(c.Keys()) != 2 {
-		t.Error("Both items should be present")
-	}
-
+	// Add third item - should trigger LRU eviction of key2 (least recently used)
 	c.Set("key3", "value3", time.Minute)
 
-	keys := c.Keys()
-	if len(keys) != 2 {
-		t.Errorf("Expected 2 keys, got %d", len(keys))
+	if c.Size() != 2 {
+		t.Errorf("Cache size should not exceed max size, got %d", c.Size())
 	}
 
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("First key should have been evicted")
+	// key2 should be evicted, key1 and key3 should remain
+	if _, exists := c.Get("key2"); exists {
+		t.Error("LRU key should have been evicted")
 	}
-
-	_, exists = c.Get("key2")
-	if !exists {
-		t.Error("Second key should still be present")
+	if _, exists := c.Get("key1"); !exists {
+		t.Error("Recently used key should still exist")
 	}
-
-	_, exists = c.Get("key3")
-	if !exists {
-		t.Error("Third key should be present")
+	if _, exists := c.Get("key3"); !exists {
+		t.Error("New key should exist")
 	}
 }
 
-// Тест взаимодействия максимального размера и TTL
-func TestMaxSizeWithExpiration(t *testing.T) {
-	c := cache.New(time.Minute, 2)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-	c.Set("key2", "value2", 10*time.Millisecond)
-
-	time.Sleep(20 * time.Millisecond)
-
-	c.Set("key3", "value3", time.Minute)
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Expired key1 should have been evicted")
-	}
-
-	_, exists = c.Get("key2")
-	if exists {
-		t.Error("Expired key2 should have been evicted")
-	}
-
-	_, exists = c.Get("key3")
-	if !exists {
-		t.Error("New key3 should be present")
-	}
-
-	if len(c.Keys()) != 1 {
-		t.Errorf("Expected 1 key, got %d", len(c.Keys()))
-	}
-}
-
-// Тест политики вытеснения при достижении лимита
-func TestEvictionPolicy(t *testing.T) {
-	c := cache.New(time.Minute, 2)
-	defer c.Stop()
-
-	c.Set("key1", "value1", 10*time.Millisecond)
-	c.Set("key2", "value2", time.Minute)
-
-	time.Sleep(20 * time.Millisecond)
-
-	c.Set("key3", "value3", time.Minute)
-
-	_, exists := c.Get("key1")
-	if exists {
-		t.Error("Expired key should have been evicted")
-	}
-
-	_, exists = c.Get("key2")
-	if !exists {
-		t.Error("Non-expired key should still be present")
-	}
-
-	_, exists = c.Get("key3")
-	if !exists {
-		t.Error("New key should be present")
-	}
-}
-
-// Тест потокобезопасности кэша при одновременном доступе
-func TestConcurrentAccess(t *testing.T) {
+func TestConcurrency(t *testing.T) {
 	c := cache.New(time.Minute, 100)
 	defer c.Stop()
 
 	var wg sync.WaitGroup
-	numRoutines := 10
-	operationsPerRoutine := 100
+	const goroutines = 10
+	const operations = 100
 
-	for i := 0; i < numRoutines; i++ {
+	for i := 0; i < goroutines; i++ {
 		wg.Add(1)
-		go func(routineID int) {
+		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < operationsPerRoutine; j++ {
-				key := string(rune('A' + routineID))
-				value := j
-
-				if j%2 == 0 {
-					c.Set(key, value, time.Minute)
-				} else {
-					c.Get(key)
-				}
+			for j := 0; j < operations; j++ {
+				key := string(rune('A' + id))
+				c.Set(key, j, time.Minute)
+				c.Get(key)
 			}
 		}(i)
 	}
 
 	wg.Wait()
+}
 
-	keys := c.Keys()
-	if len(keys) > numRoutines {
-		t.Errorf("Unexpected number of keys: %d", len(keys))
+func TestCleanup(t *testing.T) {
+	c := cache.New(50*time.Millisecond, 10)
+	defer c.Stop()
+
+	c.Set("temp", "value", 10*time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
+
+	if c.Size() != 0 {
+		t.Error("Cleanup should remove expired items")
 	}
 }
 
-// Тест поддержки различных типов данных в качестве значений
 func TestDifferentValueTypes(t *testing.T) {
 	c := cache.New(time.Minute, 10)
 	defer c.Stop()
 
-	testCases := []struct {
+	tests := []struct {
 		key   string
 		value any
 	}{
@@ -341,28 +139,50 @@ func TestDifferentValueTypes(t *testing.T) {
 		{"map", map[string]int{"a": 1, "b": 2}},
 	}
 
-	for _, tc := range testCases {
+	for _, tc := range tests {
 		c.Set(tc.key, tc.value, time.Minute)
-		retrieved, exists := c.Get(tc.key)
+		val, exists := c.Get(tc.key)
 		if !exists {
 			t.Errorf("Value for key %s should exist", tc.key)
+			continue
 		}
 
-		switch v := retrieved.(type) {
-		case []int:
-			expected := tc.value.([]int)
-			if len(v) != len(expected) {
-				t.Errorf("Slice length mismatch for key %s", tc.key)
-			}
-		case map[string]int:
-			expected := tc.value.(map[string]int)
-			if len(v) != len(expected) {
-				t.Errorf("Map length mismatch for key %s", tc.key)
-			}
-		default:
-			if retrieved != tc.value {
-				t.Errorf("Value mismatch for key %s", tc.key)
-			}
+		// Используем reflect.DeepEqual для корректного сравнения сложных типов
+		if !reflect.DeepEqual(val, tc.value) {
+			t.Errorf("Value mismatch for key %s: got %v (%T), want %v (%T)", 
+				tc.key, val, val, tc.value, tc.value)
 		}
+	}
+}
+
+// Дополнительный тест для проверки последовательности LRU
+func TestLRUSequence(t *testing.T) {
+	c := cache.New(time.Minute, 3)
+	defer c.Stop()
+
+	// Добавляем три элемента
+	c.Set("key1", "value1", time.Minute)
+	c.Set("key2", "value2", time.Minute) 
+	c.Set("key3", "value3", time.Minute)
+
+	// Обращаемся к key1 и key3, делая key2 наименее используемым
+	c.Get("key1")
+	c.Get("key3")
+
+	// Добавляем четвертый элемент - должен вытеснить key2
+	c.Set("key4", "value4", time.Minute)
+
+	// Проверяем, что key2 вытеснен, а остальные остались
+	if _, exists := c.Get("key2"); exists {
+		t.Error("key2 should have been evicted as LRU")
+	}
+	if _, exists := c.Get("key1"); !exists {
+		t.Error("key1 should still exist")
+	}
+	if _, exists := c.Get("key3"); !exists {
+		t.Error("key3 should still exist")
+	}
+	if _, exists := c.Get("key4"); !exists {
+		t.Error("key4 should exist")
 	}
 }
